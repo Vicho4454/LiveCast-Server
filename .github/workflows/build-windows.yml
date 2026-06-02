@@ -11,6 +11,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
@@ -21,7 +26,6 @@ jobs:
         with:
           msystem: MINGW64
           update: true
-          path-type: inherit
           install: >-
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-ffmpeg
@@ -30,20 +34,13 @@ jobs:
       - name: Install Wails
         run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
 
-      - name: Download NDI SDK for Windows
-        run: |
-          # En un entorno real de producción, el SDK de NDI debería descargarse desde un repositorio privado o S3
-          # debido a los términos de licencia de Vizrt. Aquí simularemos la estructura esperada por el compilador.
-          mkdir -p third_party/ndi/Include
-          mkdir -p third_party/ndi/Lib/x64
-          echo "Placeholder para Processing.NDI.Lib.x64.dll" > third_party/ndi/Lib/x64/Processing.NDI.Lib.x64.dll
-          echo "Placeholder para Processing.NDI.Lib.h" > third_party/ndi/Include/Processing.NDI.Lib.h
-
       - name: Build Windows App
-        shell: msys2 {0}
+        env:
+          CGO_ENABLED: "1"
         run: |
-          export PATH=$PATH:$(go env GOPATH)/bin
-          export CGO_ENABLED=1
+          # MSYS2 GCC and FFmpeg libraries are automatically placed in C:\msys64\mingw64\bin 
+          # which is injected into the PATH by setup-msys2.
+          # Wails and Go are available because we are using the default shell.
           wails build -platform windows/amd64
 
       - name: Upload Artifact
