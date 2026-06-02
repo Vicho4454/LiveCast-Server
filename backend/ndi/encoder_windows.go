@@ -15,6 +15,7 @@ void set_stride_win(NDIlib_video_frame_v2_t *frame, int stride) {
 import "C"
 import (
 	"fmt"
+	"math"
 	"sync"
 	"unsafe"
 )
@@ -77,7 +78,7 @@ func (e *Encoder) SendVideoFrame(data []byte, width, height, stride int) {
 		frame_rate_D:         1001,
 		picture_aspect_ratio: C.float(float32(width) / float32(height)),
 		frame_format_type:    C.NDIlib_frame_format_type_progressive,
-		timecode:             C.NDIlib_send_timecode_synthesize,
+		timecode:             C.int64_t(math.MaxInt64),
 		p_data:               (*C.uint8_t)(cData),
 	}
 	C.set_stride_win(&videoFrame, C.int(stride))
