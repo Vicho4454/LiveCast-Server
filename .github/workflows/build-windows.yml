@@ -38,6 +38,7 @@ jobs:
         shell: bash
         env:
           CGO_ENABLED: "1"
+          PKG_CONFIG: "/c/msys64/mingw64/bin/pkg-config.exe"
         run: |
           export PATH="/c/msys64/mingw64/bin:$(go env GOPATH)/bin:$PATH"
           wails build -platform windows/amd64
