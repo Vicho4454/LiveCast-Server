@@ -39,6 +39,7 @@ jobs:
         env:
           CGO_ENABLED: "1"
         run: |
+          export PATH=$PATH:$(go env GOPATH)/bin
           wails build -platform windows/amd64
 
       - name: Upload Artifact
