@@ -35,12 +35,10 @@ jobs:
         run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
 
       - name: Build Windows App
+        shell: msys2 {0}
         env:
           CGO_ENABLED: "1"
         run: |
-          # MSYS2 GCC and FFmpeg libraries are automatically placed in C:\msys64\mingw64\bin 
-          # which is injected into the PATH by setup-msys2.
-          # Wails and Go are available because we are using the default shell.
           wails build -platform windows/amd64
 
       - name: Upload Artifact
