@@ -3,7 +3,7 @@
 #import <Foundation/Foundation.h>
 #import <VideoToolbox/VideoToolbox.h>
 #import <CoreMedia/CoreMedia.h>
-#include "vt_decoder.h"
+#import "vt_decoder_darwin.h"
 
 typedef struct {
     VTDecompressionSessionRef session;

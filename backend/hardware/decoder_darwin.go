@@ -4,7 +4,7 @@ package hardware
 /*
 #cgo CFLAGS: -x objective-c
 #cgo LDFLAGS: -framework CoreFoundation -framework CoreMedia -framework VideoToolbox -framework CoreVideo -framework Foundation
-#include "vt_decoder.h"
+#include "vt_decoder_darwin.h"
 #include <stdlib.h>
 #include <string.h>
 
