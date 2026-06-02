@@ -1,0 +1,11 @@
+#!/bin/bash
+# Configuración silenciosa de Firewall (PF) en macOS
+echo "Configurando puertos para NDI (5960-5980), mDNS (5353), RTMP (1935) y RTSP (8554)..."
+cat << 'RUL' > /etc/pf.anchors/com.livecast.server
+pass in proto tcp from any to any port { 1935, 8554, 5960:5980 }
+pass in proto udp from any to any port { 5353, 5960:5980, 8554 }
+RUL
+grep -q "anchor \"com.livecast.server\"" /etc/pf.conf || echo "anchor \"com.livecast.server\"" >> /etc/pf.conf
+grep -q "load anchor \"com.livecast.server\"" /etc/pf.conf || echo "load anchor \"com.livecast.server\" from \"/etc/pf.anchors/com.livecast.server\"" >> /etc/pf.conf
+pfctl -f /etc/pf.conf
+pfctl -E

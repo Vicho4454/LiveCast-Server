@@ -1,0 +1,52 @@
+name: Wails Build Windows
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.22'
+
+      - name: Setup MSYS2 (MinGW64) and FFmpeg
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-ffmpeg
+            mingw-w64-x86_64-pkgconf
+
+      - name: Install Wails
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+
+      - name: Download NDI SDK for Windows
+        run: |
+          # En un entorno real de producción, el SDK de NDI debería descargarse desde un repositorio privado o S3
+          # debido a los términos de licencia de Vizrt. Aquí simularemos la estructura esperada por el compilador.
+          mkdir -p third_party/ndi/Include
+          mkdir -p third_party/ndi/Lib/x64
+          echo "Placeholder para Processing.NDI.Lib.x64.dll" > third_party/ndi/Lib/x64/Processing.NDI.Lib.x64.dll
+          echo "Placeholder para Processing.NDI.Lib.h" > third_party/ndi/Include/Processing.NDI.Lib.h
+
+      - name: Build Windows App
+        shell: msys2 {0}
+        run: |
+          export PATH=$PATH:$(go env GOPATH)/bin
+          export CGO_ENABLED=1
+          wails build -platform windows/amd64
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: LiveCast-Server-Windows
+          path: build/bin/
