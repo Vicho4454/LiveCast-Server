@@ -163,7 +163,7 @@ import (
 )
 
 type Decoder struct {
-	ref            C.FFmpegDecoderRef
+	ref            unsafe.Pointer
 	OnFrameDecoded func(data []byte, width, height, stride int)
 	id             int
 }
