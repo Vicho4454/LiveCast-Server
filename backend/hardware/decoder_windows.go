@@ -2,7 +2,8 @@
 package hardware
 
 /*
-#cgo pkg-config: libavcodec libavutil libswscale
+#cgo CFLAGS: -IC:/msys64/mingw64/include
+#cgo LDFLAGS: -LC:/msys64/mingw64/lib -lavcodec -lavutil -lswscale
 #include <libavcodec/avcodec.h>
 #include <libavutil/hwcontext.h>
 #include <libavutil/opt.h>
