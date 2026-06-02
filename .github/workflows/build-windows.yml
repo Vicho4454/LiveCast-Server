@@ -35,11 +35,11 @@ jobs:
         run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
 
       - name: Build Windows App
-        shell: msys2 {0}
+        shell: bash
         env:
           CGO_ENABLED: "1"
         run: |
-          export PATH=$PATH:$(go env GOPATH)/bin
+          export PATH="/c/msys64/mingw64/bin:$(go env GOPATH)/bin:$PATH"
           wails build -platform windows/amd64
 
       - name: Upload Artifact
