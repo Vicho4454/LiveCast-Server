@@ -2,8 +2,7 @@
 package hardware
 
 /*
-#cgo CFLAGS: -I${SRCDIR}/../../third_party/ffmpeg/include
-#cgo LDFLAGS: -L${SRCDIR}/../../third_party/ffmpeg/lib -lavcodec -lavutil -lswscale
+#cgo pkg-config: libavcodec libavutil libswscale
 #include <libavcodec/avcodec.h>
 #include <libavutil/hwcontext.h>
 #include <libavutil/opt.h>
