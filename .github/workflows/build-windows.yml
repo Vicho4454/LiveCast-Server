@@ -40,11 +40,21 @@ jobs:
         env:
           CGO_ENABLED: "1"
         run: |
-          export PATH=$PATH:$(go env GOPATH)/bin
+          export PATH=$PATH:$(go env GOPATH)/bin:$(pwd)/third_party/ndi/Lib/x64
           wails build -platform windows/amd64
+          
+          # Copiar todas las DLLs necesarias a la carpeta final para que la app funcione
+          cp third_party/ndi/Lib/x64/Processing.NDI.Lib.x64.dll build/bin/
+          cp /mingw64/bin/avcodec-*.dll build/bin/
+          cp /mingw64/bin/avutil-*.dll build/bin/
+          cp /mingw64/bin/swscale-*.dll build/bin/
+          cp /mingw64/bin/swresample-*.dll build/bin/ || true
+          cp /mingw64/bin/libgcc_s_seh-*.dll build/bin/ || true
+          cp /mingw64/bin/libstdc++-*.dll build/bin/ || true
+          cp /mingw64/bin/libwinpthread-*.dll build/bin/ || true
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: LiveCast-Server-Windows
+          name: LiveCast-Server-Windows-EXE
           path: build/bin/
