@@ -43,15 +43,16 @@ jobs:
           export PATH=$PATH:$(go env GOPATH)/bin:$(pwd)/third_party/ndi/Lib/x64
           wails build -platform windows/amd64
           
-          # Copiar todas las DLLs necesarias a la carpeta final para que la app funcione
+          # Copiar DLLs maestras necesarias
           cp third_party/ndi/Lib/x64/Processing.NDI.Lib.x64.dll build/bin/
           cp /mingw64/bin/avcodec-*.dll build/bin/
           cp /mingw64/bin/avutil-*.dll build/bin/
           cp /mingw64/bin/swscale-*.dll build/bin/
-          cp /mingw64/bin/swresample-*.dll build/bin/ || true
-          cp /mingw64/bin/libgcc_s_seh-*.dll build/bin/ || true
-          cp /mingw64/bin/libstdc++-*.dll build/bin/ || true
-          cp /mingw64/bin/libwinpthread-*.dll build/bin/ || true
+          
+          # Copiar recursivamente TODAS las dependencias de las librerías de FFmpeg (hasta 5 niveles de profundidad)
+          for i in {1..5}; do
+            ldd build/bin/*.exe build/bin/*.dll 2>/dev/null | grep -i '\.dll' | awk '{print $3}' | grep -i '^/mingw64/bin' | sort -u | xargs -I {} cp -n "{}" build/bin/ || true
+          done
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
