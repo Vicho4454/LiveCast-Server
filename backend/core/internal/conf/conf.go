@@ -1076,6 +1076,16 @@ func (conf *Conf) Validate(l logger.Writer) error {
 
 	conf.Paths = make(map[string]*Path)
 
+	// Inyectar 'all_others' por defecto si no hay rutas configuradas
+	if len(conf.OptionalPaths) == 0 {
+		if conf.OptionalPaths == nil {
+			conf.OptionalPaths = make(map[string]*OptionalPath)
+		}
+		conf.OptionalPaths["~^.*$"] = &OptionalPath{
+			Values: newOptionalPathValues(),
+		}
+	}
+
 	for _, name := range sortedKeys(conf.OptionalPaths) {
 		optional := conf.OptionalPaths[name]
 		if optional == nil {

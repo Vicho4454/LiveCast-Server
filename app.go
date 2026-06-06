@@ -1,14 +1,18 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"net"
 	"net/http"
 	"runtime"
 	"sync"
 	"time"
 
+	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 	"github.com/bluenviron/mediamtx"
 	"SERVLOC-TEST/backend/decoder"
 	"SERVLOC-TEST/backend/ndi"
@@ -53,6 +57,29 @@ func (a *App) shutdown(ctx context.Context) {
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	fmt.Println("SERVLOC-TEST Backend Inicializado")
+
+	// Capturar stdout para la consola del frontend
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+	os.Stderr = w
+
+	go func() {
+		scanner := bufio.NewScanner(r)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if a.ctx != nil {
+				wailsruntime.EventsEmit(a.ctx, "backend-log", line)
+			}
+		}
+	}()
+
+	// Hack for macOS 14+: Force Local Network permission prompt by initiating an outbound local connection
+	go func() {
+		conn, _ := net.DialTimeout("udp", "255.255.255.255:12345", 1*time.Second)
+		if conn != nil {
+			conn.Close()
+		}
+	}()
 
 	err := ndi.Init()
 	if err == nil {
