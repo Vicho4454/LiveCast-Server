@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"net"
 	"net/http"
@@ -18,25 +19,40 @@ import (
 	"SERVLOC-TEST/backend/ndi"
 )
 
+// DeviceTelemetry maps the incoming telemetry JSON payload
+type DeviceTelemetry struct {
+	StreamID     string `json:"streamId"`
+	BatteryLevel int    `json:"batteryLevel"`
+	IsCharging   bool   `json:"isCharging"`
+	LastUpdate   time.Time `json:"-"`
+}
+
 // App struct
 type App struct {
-	ctx          context.Context
-	m            *mediamtx.Server
-	activeNDI    map[string]*ndi.Encoder
-	ndiMutex     sync.Mutex
-	ndiIsInit    bool
+	ctx           context.Context
+	m             *mediamtx.Server
+	activeNDI     map[string]*ndi.Encoder
+	ndiMutex      sync.Mutex
+	ndiIsInit     bool
+	telemetry     map[string]DeviceTelemetry
+	telemetryMut  sync.RWMutex
+	httpServer    *http.Server
 }
 
 // NewApp creates a new App application struct
 func NewApp() *App {
 	return &App{
 		activeNDI: make(map[string]*ndi.Encoder),
+		telemetry: make(map[string]DeviceTelemetry),
 	}
 }
 
 // shutdown is called at application termination
 func (a *App) shutdown(ctx context.Context) {
 	fmt.Println("Ejecutando Graceful Shutdown: Cerrando RTMP, NDI, RTSP y liberando puertos...")
+	if a.httpServer != nil {
+		a.httpServer.Shutdown(context.Background())
+	}
 	if a.m != nil {
 		a.m.Close()
 	}
@@ -98,6 +114,60 @@ func (a *App) startup(ctx context.Context) {
 		a.m = m
 		a.m.Wait()
 	}()
+
+	// Iniciar Servidor HTTP para Telemetría y Panel Remoto (Puerto 3000)
+	go a.startHTTPServer()
+}
+
+func (a *App) startHTTPServer() {
+	mux := http.NewServeMux()
+
+	// 1. Endpoint POST para recibir telemetría
+	mux.HandleFunc("/api/telemetry", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var t DeviceTelemetry
+		if err := json.NewDecoder(r.Body).Decode(&t); err != nil {
+			http.Error(w, "Invalid JSON", http.StatusBadRequest)
+			return
+		}
+		t.LastUpdate = time.Now()
+		
+		a.telemetryMut.Lock()
+		a.telemetry[t.StreamID] = t
+		a.telemetryMut.Unlock()
+
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status":"ok"}`))
+	})
+
+	// 2. Endpoint GET para exponer los datos (usado por el panel web)
+	mux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// Agregamos CORS por si acasi
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		json.NewEncoder(w).Encode(a.GetTelemetry())
+	})
+
+	// 3. Servir el Frontend empaquetado (Vue/Wails)
+	frontendFS, err := fs.Sub(assets, "frontend/dist")
+	if err != nil {
+		fmt.Println("No se pudo cargar el frontendFS estático:", err)
+	} else {
+		mux.Handle("/", http.FileServer(http.FS(frontendFS)))
+	}
+
+	a.httpServer = &http.Server{
+		Addr:    ":3000",
+		Handler: mux,
+	}
+
+	fmt.Println("Servidor Web/Telemetría escuchando en http://localhost:3000")
+	if err := a.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		fmt.Println("Error en servidor HTTP:", err)
+	}
 }
 
 // GetTelemetry returns system and server stats to the frontend
@@ -120,13 +190,21 @@ func (a *App) GetTelemetry() map[string]interface{} {
 			} `json:"items"`
 		}
 		if json.NewDecoder(resp.Body).Decode(&result) == nil {
+			a.telemetryMut.RLock()
 			for _, item := range result.Items {
 				if item.Ready {
 					currentStreams[item.Name] = true
+
+					// Obtenemos telemetría si existe
+					t := a.telemetry[item.Name]
+
 					sessions = append(sessions, map[string]interface{}{
 						"id":      item.Name,
 						"bitrate": 6.5, // Mocked bitrate to show green health
 						"ndiName": "LiveCast-" + item.Name,
+						"batteryLevel": t.BatteryLevel,
+						"isCharging":   t.IsCharging,
+						"hasTelemetry": !t.LastUpdate.IsZero() && time.Since(t.LastUpdate) < 15*time.Second,
 					})
 
 					// Si NDI está iniciado y no existe el encoder para este stream, lo creamos
@@ -152,6 +230,7 @@ func (a *App) GetTelemetry() map[string]interface{} {
 					a.ndiMutex.Unlock()
 				}
 			}
+			a.telemetryMut.RUnlock()
 		}
 	}
 

@@ -15,15 +15,31 @@ let interval: ReturnType<typeof setInterval>
 onMounted(async () => {
   try {
     // Wails JS bindings are injected globally
-    GetTelemetry = (window as any).go.main.App.GetTelemetry
+    GetTelemetry = (window as any).go?.main?.App?.GetTelemetry
+  } catch(e) {}
+
+  const fetchTelemetry = async () => {
     if (GetTelemetry) {
-      telemetry.value = await GetTelemetry()
-      interval = setInterval(async () => {
-        telemetry.value = await GetTelemetry()
-      }, 1000)
+      return await GetTelemetry()
+    } else {
+      // Fallback para navegador web remoto
+      const res = await fetch('/api/status')
+      if (!res.ok) throw new Error('Network error')
+      return await res.json()
     }
+  }
+
+  try {
+    telemetry.value = await fetchTelemetry()
+    interval = setInterval(async () => {
+      try {
+        telemetry.value = await fetchTelemetry()
+      } catch(e) {
+        console.error("Error fetching telemetry:", e)
+      }
+    }, 1000)
   } catch(e) {
-    console.error("Wails bindings not loaded")
+    console.error("Initialization error:", e)
   }
 })
 
@@ -74,13 +90,14 @@ function copyRTSP(streamName: string) {
           <tr>
             <th>Origen (RTMP)</th>
             <th>Salud (Bitrate)</th>
+            <th>Batería</th>
             <th>Nombre NDI (Editable)</th>
             <th>Respaldo RTSP</th>
           </tr>
         </thead>
         <tbody>
           <tr v-if="!telemetry.sessions || telemetry.sessions.length === 0">
-            <td colspan="4" class="empty-state">Esperando conexión de cámaras...</td>
+            <td colspan="5" class="empty-state">Esperando conexión de cámaras...</td>
           </tr>
           <tr v-for="cam in telemetry.sessions" :key="cam.id">
             <td>live/{{ cam.id }}</td>
@@ -89,6 +106,15 @@ function copyRTSP(streamName: string) {
                 <span class="dot" :style="{ backgroundColor: getHealthColor(cam.bitrate) }"></span>
                 {{ cam.bitrate.toFixed(2) }} Mbps
               </div>
+            </td>
+            <td>
+              <div v-if="cam.hasTelemetry" class="battery-indicator">
+                <span :style="{ color: cam.batteryLevel <= 20 ? '#ef4444' : '#10b981' }">
+                  {{ cam.batteryLevel }}%
+                </span>
+                <span v-if="cam.isCharging" title="Cargando"> ⚡</span>
+              </div>
+              <div v-else class="text-muted">N/A</div>
             </td>
             <td>
               <input type="text" class="ndi-input" v-model="cam.ndiName" />
