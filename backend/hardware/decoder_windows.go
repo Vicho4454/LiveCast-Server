@@ -19,7 +19,6 @@ typedef struct {
     AVBufferRef *hw_device_ctx;
     struct SwsContext *sws_ctx;
     AVFrame *hw_frame;
-    AVFrame *sw_frame;
     AVFrame *bgra_frame;
     AVPacket *pkt;
     FFmpegFrameCallback callback;
@@ -29,16 +28,6 @@ typedef struct {
 } FFmpegDecoderCtx;
 
 extern void goFrameCallbackWindows(void* user_data, uint8_t* bgra_data, int width, int height, int stride);
-
-static enum AVPixelFormat get_hw_format(AVCodecContext *ctx, const enum AVPixelFormat *pix_fmts) {
-    const enum AVPixelFormat *p;
-    for (p = pix_fmts; *p != -1; p++) {
-        if (*p == AV_PIX_FMT_D3D11 || *p == AV_PIX_FMT_DXVA2_VLD) {
-            return *p;
-        }
-    }
-    return AV_PIX_FMT_NONE;
-}
 
 static void* FFmpegDecoderCreate(const uint8_t* sps, size_t sps_size, const uint8_t* pps, size_t pps_size, FFmpegFrameCallback callback, void* user_data) {
     FFmpegDecoderCtx *ctx = calloc(1, sizeof(FFmpegDecoderCtx));
@@ -50,21 +39,6 @@ static void* FFmpegDecoderCreate(const uint8_t* sps, size_t sps_size, const uint
 
     ctx->codec_ctx = avcodec_alloc_context3(codec);
     if (!ctx->codec_ctx) { free(ctx); return NULL; }
-
-    // Init hardware device (D3D11VA - Windows Native)
-    int err = av_hwdevice_ctx_create(&ctx->hw_device_ctx, AV_HWDEVICE_TYPE_D3D11VA, NULL, NULL, 0);
-    if (err < 0) {
-        // Fallback to DXVA2
-        err = av_hwdevice_ctx_create(&ctx->hw_device_ctx, AV_HWDEVICE_TYPE_DXVA2, NULL, NULL, 0);
-        if (err < 0) {
-            ctx->hw_device_ctx = NULL; // CPU fallback
-        }
-    }
-
-    if (ctx->hw_device_ctx) {
-        ctx->codec_ctx->hw_device_ctx = av_buffer_ref(ctx->hw_device_ctx);
-        ctx->codec_ctx->get_format = get_hw_format;
-    }
 
     // Extradata requires Annex B formatting: 0x00 00 00 01
     if (sps_size > 0 && pps_size > 0) {
@@ -86,7 +60,6 @@ static void* FFmpegDecoderCreate(const uint8_t* sps, size_t sps_size, const uint
     }
 
     ctx->hw_frame = av_frame_alloc();
-    ctx->sw_frame = av_frame_alloc();
     ctx->bgra_frame = av_frame_alloc();
     ctx->pkt = av_packet_alloc();
 
@@ -104,14 +77,6 @@ static void FFmpegDecoderDecode(void* decoder, const uint8_t* nalu_data, size_t 
 
     while (avcodec_receive_frame(ctx->codec_ctx, ctx->hw_frame) == 0) {
         AVFrame *frame = ctx->hw_frame;
-
-        if (frame->format == AV_PIX_FMT_D3D11 || frame->format == AV_PIX_FMT_DXVA2_VLD) {
-            if (av_hwframe_transfer_data(ctx->sw_frame, ctx->hw_frame, 0) < 0) {
-                av_frame_unref(ctx->hw_frame);
-                continue;
-            }
-            frame = ctx->sw_frame;
-        }
 
         int w = frame->width;
         int h = frame->height;
@@ -136,7 +101,6 @@ static void FFmpegDecoderDecode(void* decoder, const uint8_t* nalu_data, size_t 
         }
 
         av_frame_unref(ctx->hw_frame);
-        av_frame_unref(ctx->sw_frame);
     }
 }
 
@@ -147,7 +111,6 @@ static void FFmpegDecoderDestroy(void* decoder) {
         if (ctx->hw_device_ctx) av_buffer_unref(&ctx->hw_device_ctx);
         if (ctx->sws_ctx) sws_freeContext(ctx->sws_ctx);
         if (ctx->hw_frame) av_frame_free(&ctx->hw_frame);
-        if (ctx->sw_frame) av_frame_free(&ctx->sw_frame);
         if (ctx->bgra_frame) av_frame_free(&ctx->bgra_frame);
         if (ctx->pkt) av_packet_free(&ctx->pkt);
         if (ctx->bgra_buffer) av_freep(&ctx->bgra_buffer);
