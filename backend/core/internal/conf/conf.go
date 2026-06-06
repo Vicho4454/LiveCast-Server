@@ -439,6 +439,7 @@ func (conf *Conf) setDefaults() {
 	conf.AuthJWTClaimKey = "mediamtx_permissions"
 
 	// Control API
+	conf.API = true
 	conf.APIAddress = ":9997"
 	conf.APIServerKey = "server.key"
 	conf.APIServerCert = "server.crt"
