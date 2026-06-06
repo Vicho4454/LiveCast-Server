@@ -23,6 +23,12 @@
         <string>true</string>
         <key>NSHumanReadableCopyright</key>
         <string>{{.Info.Copyright}}</string>
+        <key>NSLocalNetworkUsageDescription</key>
+        <string>LiveCast Server necesita acceso a la red local para recibir video desde tu teléfono y transmitir la señal a NDI.</string>
+        <key>NSBonjourServices</key>
+        <array>
+            <string>_ndi._tcp</string>
+        </array>
         {{if .Info.FileAssociations}}
         <key>CFBundleDocumentTypes</key>
         <array>
