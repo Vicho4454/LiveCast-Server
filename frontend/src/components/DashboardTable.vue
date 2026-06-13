@@ -88,6 +88,7 @@ function copyRTSP(streamName: string) {
       <table class="data-table">
         <thead>
           <tr>
+            <th>Vista Previa</th>
             <th>Origen (RTMP)</th>
             <th>Salud (Bitrate)</th>
             <th>Batería</th>
@@ -97,10 +98,13 @@ function copyRTSP(streamName: string) {
         </thead>
         <tbody>
           <tr v-if="!telemetry.sessions || telemetry.sessions.length === 0">
-            <td colspan="5" class="empty-state">Esperando conexión de cámaras...</td>
+            <td colspan="6" class="empty-state">Esperando conexión de cámaras...</td>
           </tr>
           <tr v-for="cam in telemetry.sessions" :key="cam.id">
-            <td>live/{{ cam.id }}</td>
+            <td class="preview-cell">
+              <img :src="`/api/stream?id=${cam.id}`" class="mini-preview" alt="Prev" />
+            </td>
+            <td>{{ cam.id }}</td>
             <td>
               <div class="health-indicator">
                 <span class="dot" :style="{ backgroundColor: getHealthColor(cam.bitrate) }"></span>
@@ -179,4 +183,6 @@ h2 { margin: 0; font-size: 16px; font-weight: 600; }
 .btn { background-color: var(--primary-color); color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; }
 .btn-outline { background-color: transparent; border: 1px solid var(--primary-color); color: var(--primary-color); }
 .empty-state { text-align: center; color: var(--text-muted); padding: 40px !important; }
+.preview-cell { width: 100px; }
+.mini-preview { width: 90px; height: 50px; object-fit: cover; border-radius: 4px; background: #000; border: 1px solid #333; }
 </style>

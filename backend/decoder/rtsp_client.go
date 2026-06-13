@@ -18,6 +18,7 @@ type Pipeline struct {
 	hwDecoder  *hardware.Decoder
 	ndiEncoder *ndi.Encoder
 	streamName string
+	OnFrame    func(data []byte, width, height, stride int)
 }
 
 // NewPipeline creates a new decoding and translation pipeline
@@ -88,6 +89,9 @@ func (p *Pipeline) Start() error {
 	// Connect decoded frame callback to NDI encoder
 	p.hwDecoder.OnFrameDecoded = func(data []byte, width, height, stride int) {
 		p.ndiEncoder.SendVideoFrame(data, width, height, stride)
+		if p.OnFrame != nil {
+			p.OnFrame(data, width, height, stride)
+		}
 	}
 
 	// Setup RTP packet decoder

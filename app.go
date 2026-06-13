@@ -9,6 +9,7 @@ import (
 	"os"
 	"net"
 	"net/http"
+	"strings"
 	"runtime"
 	"sync"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/bluenviron/mediamtx"
 	"SERVLOC-TEST/backend/decoder"
 	"SERVLOC-TEST/backend/ndi"
+	"SERVLOC-TEST/backend/preview"
 )
 
 // DeviceTelemetry maps the incoming telemetry JSON payload
@@ -32,6 +34,7 @@ type App struct {
 	ctx           context.Context
 	m             *mediamtx.Server
 	activeNDI     map[string]*ndi.Encoder
+	broadcasters  map[string]*preview.Broadcaster
 	ndiMutex      sync.Mutex
 	ndiIsInit     bool
 	telemetry     map[string]DeviceTelemetry
@@ -42,8 +45,9 @@ type App struct {
 // NewApp creates a new App application struct
 func NewApp() *App {
 	return &App{
-		activeNDI: make(map[string]*ndi.Encoder),
-		telemetry: make(map[string]DeviceTelemetry),
+		activeNDI:    make(map[string]*ndi.Encoder),
+		broadcasters: make(map[string]*preview.Broadcaster),
+		telemetry:    make(map[string]DeviceTelemetry),
 	}
 }
 
@@ -151,7 +155,55 @@ func (a *App) startHTTPServer() {
 		json.NewEncoder(w).Encode(a.GetTelemetry())
 	})
 
-	// 3. Servir el Frontend empaquetado (Vue/Wails)
+	// 3. Endpoint MJPEG para previsualización en vivo (Modo Estudio)
+	mux.HandleFunc("/api/stream", func(w http.ResponseWriter, r *http.Request) {
+		streamID := r.URL.Query().Get("id")
+		if streamID == "" {
+			http.Error(w, "Missing id", http.StatusBadRequest)
+			return
+		}
+
+		a.ndiMutex.Lock()
+		broadcaster := a.broadcasters[streamID]
+		a.ndiMutex.Unlock()
+
+		if broadcaster == nil {
+			http.Error(w, "Stream not found", http.StatusNotFound)
+			return
+		}
+
+		// Configurar cabeceras para MJPEG
+		w.Header().Set("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+		w.Header().Set("Cache-Control", "no-cache, private")
+		w.Header().Set("Pragma", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+
+		ch := broadcaster.Subscribe()
+		defer broadcaster.Unsubscribe(ch)
+
+		for {
+			select {
+			case <-r.Context().Done():
+				return
+			case frame := <-ch:
+				_, err := w.Write([]byte(fmt.Sprintf("--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n", len(frame))))
+				if err != nil {
+					return
+				}
+				_, err = w.Write(frame)
+				if err != nil {
+					return
+				}
+				_, err = w.Write([]byte("\r\n"))
+				if err != nil {
+					return
+				}
+			}
+		}
+	})
+
+	// 4. Servir el Frontend empaquetado (Vue/Wails)
 	frontendFS, err := fs.Sub(assets, "frontend/dist")
 	if err != nil {
 		fmt.Println("No se pudo cargar el frontendFS estático:", err)
@@ -195,8 +247,13 @@ func (a *App) GetTelemetry() map[string]interface{} {
 				if item.Ready {
 					currentStreams[item.Name] = true
 
-					// Obtenemos telemetría si existe
-					t := a.telemetry[item.Name]
+					// Obtenemos telemetría si existe (por nombre completo o nombre corto)
+					t, ok := a.telemetry[item.Name]
+					if !ok {
+						parts := strings.Split(item.Name, "/")
+						shortID := parts[len(parts)-1]
+						t = a.telemetry[shortID]
+					}
 
 					sessions = append(sessions, map[string]interface{}{
 						"id":      item.Name,
@@ -211,10 +268,21 @@ func (a *App) GetTelemetry() map[string]interface{} {
 					a.ndiMutex.Lock()
 					if a.ndiIsInit && a.activeNDI[item.Name] == nil {
 						fmt.Println("Activando pipeline decodificador para:", item.Name)
+						
+						// Iniciar Broadcaster para MJPEG
+						broadcaster := preview.NewBroadcaster()
+						
+						// Determinar el shortID para el endpoint HTTP
+						parts := strings.Split(item.Name, "/")
+						shortID := parts[len(parts)-1]
+						a.broadcasters[shortID] = broadcaster
+
 						enc, err := ndi.NewEncoder("LiveCast-" + item.Name)
 						if err == nil {
 							a.activeNDI[item.Name] = enc
 							pipeline := decoder.NewPipeline(item.Name, enc)
+							pipeline.OnFrame = broadcaster.PushFrame
+							
 							go func() {
 								// We wait 1 second to ensure the RTSP path is fully published
 								time.Sleep(1 * time.Second)
@@ -241,6 +309,10 @@ func (a *App) GetTelemetry() map[string]interface{} {
 			fmt.Println("Cerrando salida NDI para:", name)
 			enc.Close()
 			delete(a.activeNDI, name)
+
+			parts := strings.Split(name, "/")
+			shortID := parts[len(parts)-1]
+			delete(a.broadcasters, shortID)
 		}
 	}
 	a.ndiMutex.Unlock()

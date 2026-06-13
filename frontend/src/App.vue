@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import DashboardTable from './components/DashboardTable.vue'
+import StudioView from './components/StudioView.vue'
 import { EventsOn } from '../wailsjs/runtime/runtime'
 
 const logs = ref<string[]>([])
+const activeTab = ref('dashboard')
 
 onMounted(() => {
   EventsOn('backend-log', (logLine: string) => {
@@ -25,9 +27,14 @@ onMounted(() => {
     <header class="topbar">
       <div class="logo">LC</div>
       <div class="title">LiveCast Server</div>
+      <div class="tabs">
+        <button :class="{ active: activeTab === 'dashboard' }" @click="activeTab = 'dashboard'">Panel de Control</button>
+        <button :class="{ active: activeTab === 'studio' }" @click="activeTab = 'studio'">Modo Estudio (Multicam)</button>
+      </div>
     </header>
     <main class="content">
-      <DashboardTable />
+      <DashboardTable v-show="activeTab === 'dashboard'" />
+      <StudioView v-show="activeTab === 'studio'" />
     </main>
     <footer class="log-footer">
       <div id="log-container" class="log-container">
@@ -43,6 +50,28 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   height: 100vh;
+}
+.tabs {
+  margin-left: auto;
+  display: flex;
+  gap: 10px;
+}
+.tabs button {
+  background: transparent;
+  color: #ccc;
+  border: 1px solid transparent;
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.tabs button:hover {
+  background: rgba(255,255,255,0.1);
+}
+.tabs button.active {
+  background: var(--primary-color);
+  color: white;
+  border-color: var(--primary-color);
 }
 .content {
   flex: 1;
