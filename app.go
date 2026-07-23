@@ -19,7 +19,16 @@ import (
 	"SERVLOC-TEST/backend/decoder"
 	"SERVLOC-TEST/backend/ndi"
 	"SERVLOC-TEST/backend/preview"
+	"SERVLOC-TEST/backend/control"
+	"SERVLOC-TEST/backend/tally"
+	"SERVLOC-TEST/backend/mdns"
+	"SERVLOC-TEST/backend/dvr"
+	"path/filepath"
+	_ "embed"
 )
+
+//go:embed mediamtx.yml
+var mediamtxConfig []byte
 
 // DeviceTelemetry maps the incoming telemetry JSON payload
 type DeviceTelemetry struct {
@@ -27,6 +36,13 @@ type DeviceTelemetry struct {
 	BatteryLevel int    `json:"batteryLevel"`
 	IsCharging   bool   `json:"isCharging"`
 	LastUpdate   time.Time `json:"-"`
+	Bitrate      float64 `json:"bitrate"`
+}
+
+type StreamStat struct {
+	LastBytes int64
+	LastTime  time.Time
+	Bitrate   float64
 }
 
 // App struct
@@ -35,11 +51,23 @@ type App struct {
 	m             *mediamtx.Server
 	activeNDI     map[string]*ndi.Encoder
 	broadcasters  map[string]*preview.Broadcaster
+	controlMgr    *control.Manager
 	ndiMutex      sync.Mutex
 	ndiIsInit     bool
 	telemetry     map[string]DeviceTelemetry
 	telemetryMut  sync.RWMutex
 	httpServer    *http.Server
+	mdnsServer    *mdns.Server
+	dvrRecorder   *dvr.Recorder
+	streamStats   map[string]*StreamStat
+}
+
+func getRecordingsDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "LiveCast_Recordings"
+	}
+	return filepath.Join(home, "Desktop", "LiveCast_Recordings")
 }
 
 // NewApp creates a new App application struct
@@ -47,13 +75,22 @@ func NewApp() *App {
 	return &App{
 		activeNDI:    make(map[string]*ndi.Encoder),
 		broadcasters: make(map[string]*preview.Broadcaster),
+		controlMgr:   control.NewManager(),
 		telemetry:    make(map[string]DeviceTelemetry),
+		mdnsServer:   mdns.NewServer(),
+		streamStats:  make(map[string]*StreamStat),
 	}
 }
 
 // shutdown is called at application termination
 func (a *App) shutdown(ctx context.Context) {
 	fmt.Println("Ejecutando Graceful Shutdown: Cerrando RTMP, NDI, RTSP y liberando puertos...")
+	if a.dvrRecorder != nil {
+		a.dvrRecorder.StopAll()
+	}
+	if a.mdnsServer != nil {
+		a.mdnsServer.Stop()
+	}
 	if a.httpServer != nil {
 		a.httpServer.Shutdown(context.Background())
 	}
@@ -64,6 +101,9 @@ func (a *App) shutdown(ctx context.Context) {
 	a.ndiMutex.Lock()
 	for _, enc := range a.activeNDI {
 		enc.Close()
+	}
+	for _, bc := range a.broadcasters {
+		bc.Stop()
 	}
 	a.ndiMutex.Unlock()
 
@@ -77,6 +117,16 @@ func (a *App) shutdown(ctx context.Context) {
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	fmt.Println("SERVLOC-TEST Backend Inicializado")
+	
+	// Iniciar Poller de Tally
+	tally.InitPoller(a.controlMgr)
+
+	errMDNS := a.mdnsServer.Start(8080)
+	if errMDNS != nil {
+		fmt.Println("[mDNS] Error al iniciar servicio mDNS:", errMDNS)
+	}
+
+	a.dvrRecorder = dvr.NewRecorder(getRecordingsDir())
 
 	// Capturar stdout para la consola del frontend
 	r, w, _ := os.Pipe()
@@ -108,9 +158,16 @@ func (a *App) startup(ctx context.Context) {
 		fmt.Println("Advertencia: No se pudo iniciar SDK de NDI:", err)
 	}
 
+	// Configurar MediaMTX con el archivo embebido
+	configPath := filepath.Join(os.TempDir(), "livecast_mediamtx.yml")
+	err = os.WriteFile(configPath, mediamtxConfig, 0644)
+	if err != nil {
+		fmt.Println("Error escribiendo archivo de configuración de MediaMTX:", err)
+	}
+
 	// Iniciar MediaMTX
 	go func() {
-		m, ok := mediamtx.Start()
+		m, ok := mediamtx.Start(configPath)
 		if !ok {
 			fmt.Println("Error iniciando MediaMTX")
 			return
@@ -150,7 +207,6 @@ func (a *App) startHTTPServer() {
 	// 2. Endpoint GET para exponer los datos (usado por el panel web)
 	mux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		// Agregamos CORS por si acasi
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		json.NewEncoder(w).Encode(a.GetTelemetry())
 	})
@@ -165,6 +221,11 @@ func (a *App) startHTTPServer() {
 
 		a.ndiMutex.Lock()
 		broadcaster := a.broadcasters[streamID]
+		if broadcaster == nil {
+			parts := strings.Split(streamID, "/")
+			shortID := parts[len(parts)-1]
+			broadcaster = a.broadcasters[shortID]
+		}
 		a.ndiMutex.Unlock()
 
 		if broadcaster == nil {
@@ -172,7 +233,6 @@ func (a *App) startHTTPServer() {
 			return
 		}
 
-		// Configurar cabeceras para MJPEG
 		w.Header().Set("Content-Type", "multipart/x-mixed-replace; boundary=frame")
 		w.Header().Set("Cache-Control", "no-cache, private")
 		w.Header().Set("Pragma", "no-cache")
@@ -203,7 +263,125 @@ func (a *App) startHTTPServer() {
 		}
 	})
 
-	// 4. Servir el Frontend empaquetado (Vue/Wails)
+	// 4. Endpoint de frame individual (para polling rápido en Safari/WKWebView)
+	mux.HandleFunc("/api/frame", func(w http.ResponseWriter, r *http.Request) {
+		streamID := r.URL.Query().Get("id")
+		a.ndiMutex.Lock()
+		broadcaster := a.broadcasters[streamID]
+		if broadcaster == nil {
+			parts := strings.Split(streamID, "/")
+			broadcaster = a.broadcasters[parts[len(parts)-1]]
+		}
+		a.ndiMutex.Unlock()
+
+		if broadcaster == nil {
+			http.Error(w, "Not found", 404)
+			return
+		}
+
+		ch := broadcaster.Subscribe()
+		defer broadcaster.Unsubscribe(ch)
+
+		select {
+		case <-r.Context().Done():
+			return
+		case frame := <-ch:
+			w.Header().Set("Content-Type", "image/jpeg")
+			w.Header().Set("Cache-Control", "no-store")
+			w.Write(frame)
+		case <-time.After(2 * time.Second):
+			http.Error(w, "Timeout", 504)
+		}
+	})
+
+	// 5. Endpoint WebSocket para recibir conexión de control desde el teléfono
+	mux.HandleFunc("/api/control", a.controlMgr.HandleWebSocket)
+
+	// 6. Endpoint POST para que el Dashboard envíe comandos
+	mux.HandleFunc("/api/camera/control", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		var cmd control.Command
+		if err := json.NewDecoder(r.Body).Decode(&cmd); err != nil {
+			http.Error(w, "Invalid command", http.StatusBadRequest)
+			return
+		}
+		
+		streamID := r.URL.Query().Get("id")
+		err := a.controlMgr.SendCommand(streamID, cmd)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// 7. Endpoints de Tally
+	mux.HandleFunc("/api/tally/vmix", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, DELETE")
+
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		if r.Method == http.MethodDelete {
+			tally.Stop()
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		var payload struct {
+			IP string `json:"ip"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			http.Error(w, "Invalid payload", http.StatusBadRequest)
+			return
+		}
+
+		if payload.IP == "" {
+			tally.Stop()
+		} else {
+			tally.Start(payload.IP)
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+
+	mux.HandleFunc("/api/tally/vmix/status", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Content-Type", "application/json")
+		
+		ip := tally.Status()
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"connected": ip != "",
+			"ip":        ip,
+		})
+	})
+
+	// 8. Endpoints de DVR
+	mux.HandleFunc("/api/dvr", a.handleDVR)
+
+	// 9. Servir el Frontend empaquetado (Vue/Wails)
 	frontendFS, err := fs.Sub(assets, "frontend/dist")
 	if err != nil {
 		fmt.Println("No se pudo cargar el frontendFS estático:", err)
@@ -237,12 +415,14 @@ func (a *App) GetTelemetry() map[string]interface{} {
 		defer resp.Body.Close()
 		var result struct {
 			Items []struct {
-				Name  string `json:"name"`
-				Ready bool   `json:"ready"`
+				Name          string `json:"name"`
+				Ready         bool   `json:"ready"`
+				BytesReceived int64  `json:"bytesReceived"`
 			} `json:"items"`
 		}
 		if json.NewDecoder(resp.Body).Decode(&result) == nil {
 			a.telemetryMut.RLock()
+			now := time.Now()
 			for _, item := range result.Items {
 				if item.Ready {
 					currentStreams[item.Name] = true
@@ -255,9 +435,27 @@ func (a *App) GetTelemetry() map[string]interface{} {
 						t = a.telemetry[shortID]
 					}
 
+					// Calculate actual bitrate
+					stat, exists := a.streamStats[item.Name]
+					if !exists {
+						stat = &StreamStat{LastBytes: item.BytesReceived, LastTime: now, Bitrate: 0}
+						a.streamStats[item.Name] = stat
+					} else {
+						diffTime := now.Sub(stat.LastTime).Seconds()
+						if diffTime >= 1.0 { // Update every 1s+
+							diffBytes := item.BytesReceived - stat.LastBytes
+							if diffBytes < 0 {
+								diffBytes = 0
+							}
+							stat.Bitrate = float64(diffBytes) * 8 / 1000000.0 / diffTime
+							stat.LastBytes = item.BytesReceived
+							stat.LastTime = now
+						}
+					}
+
 					sessions = append(sessions, map[string]interface{}{
 						"id":      item.Name,
-						"bitrate": 6.5, // Mocked bitrate to show green health
+						"bitrate": stat.Bitrate,
 						"ndiName": "LiveCast-" + item.Name,
 						"batteryLevel": t.BatteryLevel,
 						"isCharging":   t.IsCharging,
@@ -312,7 +510,10 @@ func (a *App) GetTelemetry() map[string]interface{} {
 
 			parts := strings.Split(name, "/")
 			shortID := parts[len(parts)-1]
-			delete(a.broadcasters, shortID)
+			if bc, ok := a.broadcasters[shortID]; ok {
+				bc.Stop()
+				delete(a.broadcasters, shortID)
+			}
 		}
 	}
 	a.ndiMutex.Unlock()
@@ -324,4 +525,46 @@ func (a *App) GetTelemetry() map[string]interface{} {
 		"version":    "1.0.0",
 		"ndiEnabled": a.ndiIsInit,
 	}
+}
+
+// handleDVR permite iniciar o detener la grabación de una cámara
+func (a *App) handleDVR(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, DELETE, GET, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+	if r.Method == http.MethodOptions {
+		return
+	}
+
+	streamID := r.URL.Query().Get("id")
+	if streamID == "" {
+		http.Error(w, "missing id parameter", http.StatusBadRequest)
+		return
+	}
+
+	if r.Method == http.MethodGet {
+		isRecording := a.dvrRecorder.IsRecording(streamID)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"recording": %v}`, isRecording)
+		return
+	}
+
+	if r.Method == http.MethodPost {
+		err := a.dvrRecorder.StartRecording(streamID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if r.Method == http.MethodDelete {
+		a.dvrRecorder.StopRecording(streamID)
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 }

@@ -1,3 +1,5 @@
 build/bin
 node_modules
 frontend/dist
+build/pkg_root
+.DS_Store

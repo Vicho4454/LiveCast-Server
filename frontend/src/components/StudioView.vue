@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
+import LiveVideo from './LiveVideo.vue'
 
 let GetTelemetry: any
 
@@ -51,7 +52,7 @@ onUnmounted(() => {
           <span class="cam-name">{{ cam.ndiName || cam.id }}</span>
           <span class="status-dot"></span>
         </div>
-        <img :src="`/api/stream?id=${cam.id}`" class="video-preview" alt="Preview" />
+        <LiveVideo :streamId="cam.id" class="video-preview" />
       </div>
     </div>
   </div>
@@ -112,7 +113,7 @@ onUnmounted(() => {
 .video-preview {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
   background: #111;
 }
 

@@ -8,8 +8,8 @@ type Server struct {
 }
 
 // Start initializes the MediaMTX core bypassing the internal restriction
-func Start() (*Server, bool) {
-	c, ok := core.New([]string{})
+func Start(configPath string) (*Server, bool) {
+	c, ok := core.New([]string{configPath})
 	if !ok {
 		return nil, false
 	}
